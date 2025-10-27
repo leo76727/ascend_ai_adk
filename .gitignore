@@ -2,3 +2,4 @@ memory.db
 .env
 data/positions.db
 pycache/
+*.pyc

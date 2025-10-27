@@ -12,12 +12,10 @@ from starlette.routing import Route
 from starlette.requests import Request
 from starlette.responses import JSONResponse, PlainTextResponse
 from typing import Optional
-
 import contextlib
 
 from mcp.server.fastmcp import FastMCP
 import uvicorn
-#from clients_mcp import ClientStore, ClientModel, ClientsResponse, ClientInfo   
 import clients_mcp as clients_mcp
 import position_mcp as position_mcp
 import quote_mcp as quote_mcp

@@ -38,7 +38,7 @@ This creates `data/positions.db` and prints a confirmation message.
 Run the example FastMCP HTTP server (recommended)
 This project uses `fastmcp` to expose streamable HTTP endpoints. Start the Starlette app using Uvicorn from the repository root:
 ```powershell
-uvicorn ascend_ai_adk.mcp.mcp_server_http:starlette_app --reload --port 8003
+python mcp\mcp_server_http.py
 ```
 When running, the example app mounts the MCP apps at the following prefixes:
 - /client
@@ -84,6 +84,20 @@ This will open the MCP Inspector in your default browser. By default, it connect
    - Enter the URL of your running MCP server (e.g., `http://localhost:8000` for the test server or `http://localhost:8003` for the FastMCP server)
    - You can now browse and test all available MCP functions through the Inspector interface
 
+-
+Sample usage (ADK Web)
+
+![ADK Web - sample usage](sample_usage/trader_manager_agent.gif)
+
+Figure: showing a trader manager agent and interaction with MCP functions (animated GIF) through ADK Web
+
+![ADK Web - sample usage](sample_usage/sales_manager_agent.gif)
+
+Figure: showing a sales manager agent and interaction with MCP functions (animated GIF) through ADK Web
+
+
 Notes and tips
 - The code is intentionally permissive: if `fastmcp` isn't installed the modules still export callable functions so you can test logic without the server runtime.
 - The MCP modules use Pydantic models for structured returns. If you decorate a function with `@mcp.tool()` and it returns an arbitrary untyped class, Pydantic will attempt to generate a schema and fail. The modules return raw dicts for untyped/unstructured responses to avoid that problem.
+
+
