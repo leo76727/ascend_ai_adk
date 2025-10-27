@@ -1,0 +1,7 @@
+fastmcp
+pydantic
+uvicorn
+starlette
+google-adk
+streamlit
+litellm
