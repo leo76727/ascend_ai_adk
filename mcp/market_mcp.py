@@ -5,12 +5,21 @@ from typing import TypedDict, Optional
 from pydantic import BaseModel
 
 try:
+    from config import config
+    DB_PATH = config.DB_PATH
+except Exception:
+    DB_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "data", "positions.db"))
+
+try:
     from mcp.server.fastmcp import FastMCP
 except Exception:
     FastMCP = None  # type: ignore
 
-
-DB_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "data", "positions.db"))
+try:
+    from sqlalchemy import create_engine, text
+except Exception:
+    create_engine = None  # type: ignore
+    text = None  # type: ignore
 
 
 class MarketModel(BaseModel):
@@ -47,21 +56,41 @@ class MarketStore:
         self.db_path = db_path
 
     def _connect(self):
+        if isinstance(self.db_path, str) and (self.db_path.startswith("postgres") or "://" in self.db_path and not self.db_path.endswith(".db")) and create_engine is not None:
+            engine = create_engine(self.db_path)
+            return engine.connect()
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
         return conn
 
     def list_market(self, limit: int = 100, offset: int = 0) -> list[dict]:
-        sql = "SELECT * FROM market ORDER BY product_id LIMIT ? OFFSET ?"
+        sql = "SELECT * FROM market ORDER BY product_id LIMIT :limit OFFSET :offset"
         conn = self._connect()
+        try:
+            if hasattr(conn, "execute") and text is not None:
+                result = conn.execute(text(sql), {"limit": limit, "offset": offset})
+                rows = [dict(r) for r in result.mappings().all()]
+                conn.close()
+                return rows
+        except Exception:
+            pass
         cur = conn.cursor()
-        cur.execute(sql, (limit, offset))
+        cur.execute(sql.replace(":limit", "?").replace(":offset", "?"), (limit, offset))
         rows = cur.fetchall()
         conn.close()
         return [dict(r) for r in rows]
 
     def get_market(self, product_id: str) -> Optional[dict]:
+        sql = "SELECT * FROM market WHERE product_id = :product_id"
         conn = self._connect()
+        try:
+            if hasattr(conn, "execute") and text is not None:
+                result = conn.execute(text(sql), {"product_id": product_id})
+                row = result.mappings().first()
+                conn.close()
+                return dict(row) if row else None
+        except Exception:
+            pass
         cur = conn.cursor()
         cur.execute("SELECT * FROM market WHERE product_id = ?", (product_id,))
         row = cur.fetchone()

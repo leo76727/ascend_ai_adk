@@ -22,6 +22,7 @@ import quote_mcp as quote_mcp
 import market_mcp as market_mcp
 import product_mcp as product_mcp
 import trades_mcp as trades_mcp
+import mtm_mcp as mtm_mcp
 
 client_mcp_server = clients_mcp.client_mcp_server
 position_mcp = position_mcp.mcp
@@ -29,6 +30,7 @@ quote_mcp = quote_mcp.mcp
 market_mcp = market_mcp.mcp
 product_mcp = product_mcp.mcp
 trades_mcp = trades_mcp.mcp
+mtm_mcp = mtm_mcp.mcp
 
 async def homepage(req: Request):
     return PlainTextResponse("ok: service is running")
@@ -41,6 +43,7 @@ quote_mcp.settings.streamable_http_path = "/"
 market_mcp.settings.streamable_http_path = "/"
 product_mcp.settings.streamable_http_path = "/"
 trades_mcp.settings.streamable_http_path = "/"
+mtm_mcp.settings.streamable_http_path = "/"
 
 @contextlib.asynccontextmanager
 async def lifespan(app: Starlette):
@@ -51,6 +54,7 @@ async def lifespan(app: Starlette):
         await stack.enter_async_context(market_mcp.session_manager.run())   
         await stack.enter_async_context(product_mcp.session_manager.run())
         await stack.enter_async_context(trades_mcp.session_manager.run())
+        await stack.enter_async_context(mtm_mcp.session_manager.run())
         yield
 
 # Mount the servers
@@ -63,6 +67,7 @@ app = Starlette(
         Mount("/market", app=market_mcp.streamable_http_app()),
         Mount("/trades", app=trades_mcp.streamable_http_app()),
         Mount("/product", app=product_mcp.streamable_http_app()),
+        Mount("/mtm", app=mtm_mcp.streamable_http_app()),
     ],
     lifespan=lifespan
 )

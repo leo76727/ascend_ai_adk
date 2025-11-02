@@ -5,30 +5,32 @@ from typing import TypedDict, Optional
 from pydantic import BaseModel, Field
 
 try:
+    from config import config
+    DB_PATH = config.DB_PATH
+except Exception:
+    DB_PATH = os.path.abspath(
+        os.path.join(os.path.dirname(__file__), "..", "data", "positions.db")
+    )
+
+try:
     from mcp.server.fastmcp import FastMCP
 except Exception:  # pragma: no cover - FastMCP optional for testing
     FastMCP = None  # type: ignore
 
-
-DB_PATH = os.path.abspath(
-    os.path.join(os.path.dirname(__file__), "..", "data", "positions.db")
-)
+try:
+    from sqlalchemy import create_engine, text
+except Exception:
+    create_engine = None  # type: ignore
+    text = None  # type: ignore
 
 
 class PositionModel(BaseModel):
     """Structured representation of a position record."""
-
-    id: int = Field(..., description="Primary key id")
-    client_id: str
-    product_id: str
-    quantity: int
-    original_price: float
-    expiration_date: str
-    current_price: float
-    notional: float
-    strike: Optional[float] = None
-    coupon: Optional[float] = None
-    currency: Optional[str] = None
+    position_id: str = Field(..., max_length=20)
+    isin: str = Field(..., max_length=12)  # NOT NULL, references Product(isin)
+    quantity: float = Field(..., description="DECIMAL(15,2) NOT NULL")
+    client_account: str = Field(..., max_length=20)  # NOT NULL, references Client(client_account)
+    expiration_date: Optional[str] = None  # DATE, nullable
 
 
 class PositionsResponse(BaseModel):
@@ -51,6 +53,9 @@ class PositionStore:
         self.db_path = db_path
 
     def _connect(self):
+        if isinstance(self.db_path, str) and (self.db_path.startswith("postgres") or "://" in self.db_path and not self.db_path.endswith(".db")) and create_engine is not None:
+            engine = create_engine(self.db_path)
+            return engine.connect()
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
         return conn
@@ -63,32 +68,56 @@ class PositionStore:
         product_id: Optional[str] = None,
     ) -> list[dict]:
         q = [
-            "SELECT id, client_id, product_id, quantity, original_price, expiration_date,",
-            "current_price, notional, strike, coupon, currency FROM positions",
+            "SELECT position_id, isin, quantity, client_account, expiration_date",
+            "FROM position",
         ]
-        params: list = []
+        params: dict = {"limit": limit, "offset": offset}
         clauses: list[str] = []
         if client_id:
-            clauses.append("client_id = ?")
-            params.append(client_id)
+            clauses.append("client_id = :client_id")
+            params["client_id"] = client_id
         if product_id:
-            clauses.append("product_id = ?")
-            params.append(product_id)
+            clauses.append("product_id = :product_id")
+            params["product_id"] = product_id
         if clauses:
             q.append("WHERE " + " AND ".join(clauses))
-        q.append("ORDER BY id LIMIT ? OFFSET ?")
-        params.extend([limit, offset])
+        q.append("ORDER BY id LIMIT :limit OFFSET :offset")
         sql = " ".join(q)
 
         conn = self._connect()
+        try:
+            if hasattr(conn, "execute") and text is not None:
+                result = conn.execute(text(sql), params)
+                rows = [dict(r) for r in result.mappings().all()]
+                conn.close()
+                return rows
+        except Exception:
+            pass
         cur = conn.cursor()
-        cur.execute(sql, params)
+        # convert named params to positional for sqlite
+        sqlite_sql = sql.replace(":client_id", "?").replace(":product_id", "?").replace(":limit", "?").replace(":offset", "?")
+        positional: list = []
+        if client_id:
+            positional.append(client_id)
+        if product_id:
+            positional.append(product_id)
+        positional.extend([limit, offset])
+        cur.execute(sqlite_sql, tuple(positional))
         rows = cur.fetchall()
         conn.close()
         return [dict(r) for r in rows]
 
     def get_position(self, position_id: int) -> Optional[dict]:
+        sql = "SELECT * FROM positions WHERE id = :id"
         conn = self._connect()
+        try:
+            if hasattr(conn, "execute") and text is not None:
+                result = conn.execute(text(sql), {"id": position_id})
+                row = result.mappings().first()
+                conn.close()
+                return dict(row) if row else None
+        except Exception:
+            pass
         cur = conn.cursor()
         cur.execute("SELECT * FROM positions WHERE id = ?", (position_id,))
         row = cur.fetchone()
@@ -105,17 +134,11 @@ store = PositionStore()
 def _convert_row_to_position_model(row: dict) -> PositionModel:
     # Convert SQL row dict to Pydantic PositionModel (handles None safely)
     return PositionModel(
-        id=int(row["id"]),
-        client_id=row.get("client_id"),
-        product_id=row.get("product_id"),
-        quantity=int(row.get("quantity", 0)),
-        original_price=float(row.get("original_price", 0.0)),
+        position_id=row["position_id"],
+        isin=row["isin"],
+        quantity=float(row["quantity"]),
+        client_account=row["client_account"],
         expiration_date=row.get("expiration_date"),
-        current_price=float(row.get("current_price", 0.0)),
-        notional=float(row.get("notional", 0.0)),
-        strike=row.get("strike"),
-        coupon=row.get("coupon"),
-        currency=row.get("currency"),
     )
 
 
