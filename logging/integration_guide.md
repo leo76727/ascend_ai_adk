@@ -40,8 +40,6 @@ google-genai-sdk==latest
 # Start MongoDB locally
 docker run -d -p 27017:27017 --name agent-traces mongo:7
 
-# Or use MongoDB Atlas (cloud)
-# Get connection string from: https://cloud.mongodb.com
 ```
 
 ## Configuration
