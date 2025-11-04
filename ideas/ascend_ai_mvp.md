@@ -87,7 +87,7 @@ The agent will analyze historical trades, quotes, and market data to suggest pri
 **High-Level Flow:**
 Front-End → REST API → Agent → Data Tools → Data Source → Agent Output → UI
 
-**Deployment**: k8s, CI/CD, secure service endpoints
+**Deployment**: k8s, CI/CD, secure service endpoints, [ADK Deployment to Non-Google Infra](https://github.com/google/adk-python/discussions/2965)
 
 **Observability**: structured JSON logs + traces
 
