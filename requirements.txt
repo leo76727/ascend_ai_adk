@@ -5,3 +5,5 @@ starlette
 google-adk
 streamlit
 litellm
+fastapi
+python-dotenv

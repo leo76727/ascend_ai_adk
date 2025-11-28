@@ -20,7 +20,7 @@ for t in tables:
 # Create tables with the requested columns
 cur.execute(
     """
-    CREATE TABLE clients (
+    CREATE TABLE client (
         client_id TEXT PRIMARY KEY,
         client_name TEXT,
         client_account TEXT,
@@ -141,7 +141,7 @@ for i in range(1, 6):
     account = f"ACCT{i:04d}"
     address = f"{i} Market St, City {i}"
     clients.append(cid)
-    cur.execute("INSERT INTO clients (client_id, client_name, client_account, client_address) VALUES (?, ?, ?, ?)",
+    cur.execute("INSERT INTO client (client_id, client_name, client_account, client_address) VALUES (?, ?, ?, ?)",
                 (cid, client_name, account, address))
 
 # Products and market

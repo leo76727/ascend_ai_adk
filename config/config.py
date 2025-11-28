@@ -1,6 +1,7 @@
 import os
 from pathlib import Path
 import json
+import traceback
 import yaml
 from dotenv import load_dotenv
 
@@ -19,6 +20,7 @@ def load_prompt_templates():
         with open(PROMPT_TEMPLATES_PATH, 'r', encoding='utf-8') as f:
             return yaml.safe_load(f) or {}
     except Exception:
+        print(f'Failed to load prompt templates from: {PROMPT_TEMPLATES_PATH} with error: {traceback.format_exc()}')
         return {}
 
 PROMPT_TEMPLATES = load_prompt_templates()

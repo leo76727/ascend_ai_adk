@@ -9,12 +9,15 @@ from google.adk.agents import Agent, callback_context
 # precedence over other paths.
 REPO_ROOT = Path(__file__).resolve().parents[1]
 print(f"REPO_ROOT: {REPO_ROOT}")
-if str(REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(REPO_ROOT))
+sys.path.insert(0, str(REPO_ROOT))
+sys.path.insert(0, str(REPO_ROOT.parent))
+print(f"Updated sys.path: {sys.path}")
+
 from google.adk.models import LlmRequest
 from google.adk.agents.callback_context import CallbackContext
 from google.adk.models.lite_llm import LiteLlm
 from google.adk.tools.mcp_tool.mcp_toolset import McpToolset, StreamableHTTPConnectionParams
+from google.adk.apps.app import EventsCompactionConfig
 from config import config
 from google.genai import types
 
@@ -57,59 +60,23 @@ def after_tool_callback(
     )
     return tool_response
 
-# --- 2. Custom LiteLLM Wrapper for Deepseek (Same as before) ---
-"""Custom LiteLLM wrapper to call Deepseek API.
-class DeepseekModel(Agent):
-    async def generate_content(
-        self, request: LlmRequest, **kwargs: Any
-    ) -> LlmResponse:
-        import litellm
-        messages = [msg.to_dict() for msg in request.contents]
-        
-        system_prompt = None
-        if messages[0]["role"] == "system":
-            system_prompt = messages.pop(0)["parts"][0]["text"]
-
-        response = await litellm.acompletion(
-            model=LiteLlm(model=config.LLM_PROVIDER),
-            messages=messages,
-            system_prompt=system_prompt,
-            api_key=config.DEEPSEEK_API_KEY,
-            tools=[t.to_dict() for t in request.tools] if request.tools else None
-        )
-        
-        choice = response.choices[0]
-        if choice.message.tool_calls:
-            tool_call = choice.message.tool_calls[0]
-            return LlmResponse(
-                contents=[
-                    agents.Content(
-                        parts=[
-                            agents.Part(
-                                function_call=agents.FunctionCall(
-                                    name=tool_call.function.name,
-                                    args=tool_call.function.arguments_json_string
-                                )
-                            )
-                        ]
-                    )
-                ]
-            )
-        else:
-            return LlmResponse(
-                contents=[
-                    agents.Content(parts=[agents.Part(text=choice.message.content)])
-                ]
-            )
-"""
 # --- 3. Agent Definition (Same as before) ---
-mcp_server_url = "http://127.0.0.1:8005/superset/mcp"  # Adjust port if needed
-superset_tool = McpToolset(
+mcp_server_url = "http://127.0.0.1:9004/mcp"  # Adjust port if needed
+superset_query_tool = McpToolset(
     connection_params=StreamableHTTPConnectionParams(
         url=mcp_server_url
 ))
 
-temperature=config.PROMPT_TEMPLATES["sales_manager"].get("temperature", 0.7)
+spec_mcp_server_url = "http://127.0.0.1:9005/mcp"  # Adjust port if needed
+superset_spec_tool = McpToolset(
+    connection_params=StreamableHTTPConnectionParams(
+        url=spec_mcp_server_url
+))
+#filtered_tools = [tool for tool in superset_tool.get_tools() if "delete" not in tool.name.lower() ]
+
+
+
+temperature=config.PROMPT_TEMPLATES["sales_manager"].get("temperature", 0.5)
 max_tokens=config.PROMPT_TEMPLATES["sales_manager"].get("max_tokens", 1500)
 print(f"Using temperature: {temperature}, max_tokens: {max_tokens} for sales_manager agent")
 
@@ -122,6 +89,15 @@ root_agent = Agent(
     name="superset_copliot_agent",
     instruction=config.PROMPT_TEMPLATES.get("superset_agent", {}).get("prompt", ""),
     model=LiteLlm(model=config.LLM_PROVIDER),  #DeepseekModel(),
-    tools=[superset_tool],
-    generate_content_config=generation_config,
+    tools=[superset_spec_tool, superset_query_tool],
+    generate_content_config=generation_config
 )
+
+'''
+    
+    events_compaction_config=EventsCompactionConfig(
+        compaction_interval=3,  # Trigger compaction every 3 new invocations.
+        overlap_size=1          # Include last invocation from the previous window.
+    ),
+
+'''

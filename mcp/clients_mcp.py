@@ -2,6 +2,13 @@ import os
 import sqlite3
 from typing import TypedDict, Optional
 from pydantic import BaseModel, Field
+from mcp.server.fastmcp import Context
+from fastmcp.server.dependencies import get_http_headers
+
+import logging
+
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logger = logging.getLogger("MyMCPApp")
 
 try:
     # Prefer config-driven DB path; config may point to sqlite or a postgres URL
@@ -55,10 +62,13 @@ class ClientStore:
         conn.row_factory = sqlite3.Row
         return conn
 
-    def list_clients(self, limit: int = 100, offset: int = 0) -> list[dict]:
+    def list_clients(self, limit: int = 100, offset: int = 0, headers: dict = None) -> list[dict]:
+        logger.info(f"*****{headers}*****")
         sql = "SELECT client_id, client_name, client_account FROM client ORDER BY client_id LIMIT :limit OFFSET :offset"
         conn = self._connect()
         try:
+            auth_header = headers.get("Authorization") if headers else None
+            logger.info(f"********Auth header in list_clients: {auth_header}")
             # SQLAlchemy connection
             if hasattr(conn, "execute") and text is not None:
                 result = conn.execute(text(sql), {"limit": limit, "offset": offset})
@@ -68,6 +78,7 @@ class ClientStore:
         except Exception:
             # fall back to sqlite path below
             pass
+
         cur = conn.cursor()
         cur.execute(sql.replace(":limit", "?" ).replace(":offset", "?"), (limit, offset))
         rows = cur.fetchall()
@@ -105,8 +116,10 @@ def _to_client_model(row: dict) -> ClientModel:
 
 @client_mcp_server.tool()
 def list_clients(limit: int = 100, offset: int = 0) -> ClientsResponse:
+        headers = get_http_headers(include_all=True)
+        logger.info(f"********Headers in list_clients: {headers}*******")
         """List clients with pagination."""
-        rows = store.list_clients(limit=limit, offset=offset)
+        rows = store.list_clients(limit=limit, offset=offset, headers=headers)
         models = [_to_client_model(r) for r in rows]
         return ClientsResponse(count=len(models), clients=models)
 

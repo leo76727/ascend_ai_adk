@@ -4,11 +4,16 @@ from pathlib import Path
 from google.adk.agents import Agent, callback_context
 from google.adk.models import LlmRequest
 from google.adk.agents.callback_context import CallbackContext
+from google.adk.agents.readonly_context import ReadonlyContext
 from google.adk.models.lite_llm import LiteLlm
 from google.adk.tools.mcp_tool.mcp_toolset import McpToolset, StreamableHTTPConnectionParams
 
 from google.genai import types
 REPO_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT_PARENT = REPO_ROOT.parent 
+sys.path.insert(0, str(REPO_ROOT_PARENT))
+print(f"REPO_ROOT: {REPO_ROOT} and REPO_ROOT_PARENT: {REPO_ROOT_PARENT}")
+
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
@@ -97,12 +102,20 @@ class DeepseekModel(Agent):
                 ]
             )
 """
+
+def get_auth_headers(ctx :ReadonlyContext = None) -> dict[str, str]:
+    header = {"Authorization: Bearer": ctx.state.get("user:bearer_token", "")} if ctx else {"no_token": "true"}
+    print(f"********Headers in get_auth_headers..header: {header}*******")
+    return header
 # --- 3. Agent Definition (Same as before) ---
 mcp_server_url = "http://127.0.0.1:8003/client"  # Adjust port if needed
 client_tool = McpToolset(
     connection_params=StreamableHTTPConnectionParams(
-        url=mcp_server_url
-))
+        url=mcp_server_url,
+    ),    
+    header_provider=get_auth_headers
+)
+
 position_mcp_server_url = "http://127.0.0.1:8003/position"
 position_tool = McpToolset(
     connection_params=StreamableHTTPConnectionParams(
