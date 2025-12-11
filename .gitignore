@@ -3,3 +3,4 @@ memory.db
 data/positions.db
 pycache/
 *.pyc
+*.class 
