@@ -13,7 +13,7 @@ conn = sqlite3.connect(DB_PATH)
 cur = conn.cursor()
 
 # Drop old tables for a clean seed (ok for demo/test environments)
-tables = ['positions', 'clients', 'trades', 'product', 'quote', 'market']
+tables = ['positions', 'client', 'trades', 'product', 'quote', 'market']
 for t in tables:
     cur.execute(f"DROP TABLE IF EXISTS {t}")
 

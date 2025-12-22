@@ -1,26 +1,15 @@
 import os
 import sqlite3
 from typing import TypedDict, Optional
-
+from sqlalchemy import create_engine, text
 from pydantic import BaseModel
+from mcp.server.fastmcp import FastMCP
 
 try:
     from config import config
     DB_PATH = config.DB_PATH
 except Exception:
     DB_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "data", "positions.db"))
-
-try:
-    from mcp.server.fastmcp import FastMCP
-except Exception:
-    FastMCP = None  # type: ignore
-
-try:
-    from sqlalchemy import create_engine, text
-except Exception:
-    create_engine = None  # type: ignore
-    text = None  # type: ignore
-
 
 class MarketModel(BaseModel):
     product_id: str
@@ -66,36 +55,52 @@ class MarketStore:
     def list_market(self, limit: int = 100, offset: int = 0) -> list[dict]:
         sql = "SELECT * FROM market ORDER BY product_id LIMIT :limit OFFSET :offset"
         conn = self._connect()
-        try:
-            if hasattr(conn, "execute") and text is not None:
-                result = conn.execute(text(sql), {"limit": limit, "offset": offset})
-                rows = [dict(r) for r in result.mappings().all()]
+        
+        if isinstance(conn, sqlite3.Connection):
+            try:
+                cur = conn.cursor()
+                cur.execute(sql.replace(":limit", "?").replace(":offset", "?"), (limit, offset))
+                rows = cur.fetchall()
                 conn.close()
-                return rows
+                return [dict(r) for r in rows]
+            except Exception:
+                conn.close()
+                return []
+        
+        # SQLAlchemy path
+        try:
+            result = conn.execute(text(sql), {"limit": limit, "offset": offset})
+            rows = [dict(r) for r in result.mappings().all()]
+            conn.close()
+            return rows
         except Exception:
-            pass
-        cur = conn.cursor()
-        cur.execute(sql.replace(":limit", "?").replace(":offset", "?"), (limit, offset))
-        rows = cur.fetchall()
-        conn.close()
-        return [dict(r) for r in rows]
+            conn.close()
+            return []
 
     def get_market(self, product_id: str) -> Optional[dict]:
         sql = "SELECT * FROM market WHERE product_id = :product_id"
         conn = self._connect()
-        try:
-            if hasattr(conn, "execute") and text is not None:
-                result = conn.execute(text(sql), {"product_id": product_id})
-                row = result.mappings().first()
+        
+        if isinstance(conn, sqlite3.Connection):
+            try:
+                cur = conn.cursor()
+                cur.execute("SELECT * FROM market WHERE product_id = ?", (product_id,))
+                row = cur.fetchone()
                 conn.close()
                 return dict(row) if row else None
+            except Exception:
+                conn.close()
+                return None
+                
+        # SQLAlchemy path
+        try:
+            result = conn.execute(text(sql), {"product_id": product_id})
+            row = result.mappings().first()
+            conn.close()
+            return dict(row) if row else None
         except Exception:
-            pass
-        cur = conn.cursor()
-        cur.execute("SELECT * FROM market WHERE product_id = ?", (product_id,))
-        row = cur.fetchone()
-        conn.close()
-        return dict(row) if row else None
+            conn.close()
+            return None
 
 
 store = MarketStore()
@@ -104,7 +109,7 @@ mcp = FastMCP("Market MCP")
 
 def _to_market_model(row: dict) -> MarketModel:
     return MarketModel(
-        product_id=row.get("product_id"),
+        product_id=row["product_id"],
         product_description=row.get("product_description"),
         payoff_type=row.get("payoff_type"),
         issue_date=row.get("issue_date"),
@@ -123,45 +128,26 @@ def _to_market_model(row: dict) -> MarketModel:
     )
 
 
-if mcp is not None:
-    @mcp.tool()
-    def list_market(limit: int = 100, offset: int = 0) -> MarketsResponse:
-        rows = store.list_market(limit=limit, offset=offset)
-        models = [_to_market_model(r) for r in rows]
-        return MarketsResponse(count=len(models), market=models)
+
+@mcp.tool()
+def list_market(limit: int = 100, offset: int = 0) -> MarketsResponse:
+    rows = store.list_market(limit=limit, offset=offset)
+    models = [_to_market_model(r) for r in rows]
+    return MarketsResponse(count=len(models), market=models)
 
 
-    @mcp.tool()
-    def get_market(product_id: str) -> Optional[MarketModel]:
-        row = store.get_market(product_id)
-        return _to_market_model(row) if row else None
+@mcp.tool()
+def get_market(product_id: str) -> Optional[MarketModel]:
+    row = store.get_market(product_id)
+    return _to_market_model(row) if row else None
 
 
-    @mcp.tool()
-    def get_market_info(product_id: str) -> Optional[MarketInfo]:
-        row = store.get_market(product_id)
-        if not row:
-            return None
-        return MarketInfo(product_id=row["product_id"], product_description=row.get("product_description"))  # type: ignore[arg-type]
-
-else:
-    def list_market(limit: int = 100, offset: int = 0) -> MarketsResponse:
-        rows = store.list_market(limit=limit, offset=offset)
-        models = [_to_market_model(r) for r in rows]
-        return MarketsResponse(count=len(models), market=models)
-
-
-    def get_market(product_id: str) -> Optional[MarketModel]:
-        row = store.get_market(product_id)
-        return _to_market_model(row) if row else None
-
-
-    def get_market_info(product_id: str) -> Optional[MarketInfo]:
-        row = store.get_market(product_id)
-        if not row:
-            return None
-        return MarketInfo(product_id=row["product_id"], product_description=row.get("product_description"))  # type: ignore[arg-type]
-
+@mcp.tool()
+def get_market_info(product_id: str) -> Optional[MarketInfo]:
+    row = store.get_market(product_id)
+    if not row:
+        return None
+    return MarketInfo(product_id=row["product_id"], product_description=row.get("product_description"))  # type: ignore[arg-type]
 
 __all__ = ["mcp", "store", "list_market", "get_market", "get_market_info" ]
 

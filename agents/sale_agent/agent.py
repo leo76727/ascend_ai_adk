@@ -2,11 +2,12 @@ import os
 import sys
 from pathlib import Path
 from google.adk.agents import Agent, callback_context
-from google.adk.models import LlmRequest
+from google.adk.models.llm_request import LlmRequest
 from google.adk.agents.callback_context import CallbackContext
 from google.adk.agents.readonly_context import ReadonlyContext
 from google.adk.models.lite_llm import LiteLlm
-from google.adk.tools.mcp_tool.mcp_toolset import McpToolset, StreamableHTTPConnectionParams
+from google.adk.tools.mcp_tool.mcp_toolset import McpToolset
+from google.adk.tools.mcp_tool.mcp_session_manager import StreamableHTTPConnectionParams
 
 from google.genai import types
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -20,7 +21,8 @@ if str(REPO_ROOT) not in sys.path:
 from config import config
 print(f"Config: {config.LLM_PROVIDER}, API Key: {config.DEEPSEEK_API_KEY}")
 print(f"Config: {config.PROMPT_TEMPLATES}")
-os.environ["DEEPSEEK_API_KEY"] = config.DEEPSEEK_API_KEY
+if config.DEEPSEEK_API_KEY:
+    os.environ["DEEPSEEK_API_KEY"] = config.DEEPSEEK_API_KEY
 
 # --- 1. Interaction Logger (Callbacks) ---
 # We now log interactions into the session state, not a global variable.
@@ -103,7 +105,7 @@ class DeepseekModel(Agent):
             )
 """
 
-def get_auth_headers(ctx :ReadonlyContext = None) -> dict[str, str]:
+def get_auth_headers(ctx :ReadonlyContext | None = None) -> dict[str, str]:
     header = {"Authorization: Bearer": ctx.state.get("user:bearer_token", "")} if ctx else {"no_token": "true"}
     print(f"********Headers in get_auth_headers..header: {header}*******")
     return header
@@ -113,7 +115,7 @@ client_tool = McpToolset(
     connection_params=StreamableHTTPConnectionParams(
         url=mcp_server_url,
     ),    
-    header_provider=get_auth_headers
+    #header_provider=get_auth_headers
 )
 
 position_mcp_server_url = "http://127.0.0.1:8003/position"

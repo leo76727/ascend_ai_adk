@@ -5,3 +5,4 @@ faker>=15.0.0
 psycopg2-binary>=2.9.0
 sqlalchemy>=1.4.0
 python-dotenv>=0.19.0
+asyncpg>=0.26.0

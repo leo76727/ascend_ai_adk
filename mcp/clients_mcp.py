@@ -2,7 +2,7 @@ import os
 import sqlite3
 from typing import TypedDict, Optional
 from pydantic import BaseModel, Field
-from mcp.server.fastmcp import Context
+from mcp.server.fastmcp import Context, FastMCP
 from fastmcp.server.dependencies import get_http_headers
 
 import logging
@@ -17,10 +17,6 @@ try:
 except Exception:
     DB_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "data", "positions.db"))
 
-try:
-    from mcp.server.fastmcp import FastMCP
-except Exception:  # pragma: no cover - FastMCP optional for testing
-    FastMCP = None  # type: ignore
 
 try:
     # optional dependency for Postgres support
@@ -62,45 +58,47 @@ class ClientStore:
         conn.row_factory = sqlite3.Row
         return conn
 
-    def list_clients(self, limit: int = 100, offset: int = 0, headers: dict = None) -> list[dict]:
+    def list_clients(self, limit: int = 100, offset: int = 0, headers: dict = {}) -> list[dict]:
         logger.info(f"*****{headers}*****")
         sql = "SELECT client_id, client_name, client_account FROM client ORDER BY client_id LIMIT :limit OFFSET :offset"
         conn = self._connect()
         try:
             auth_header = headers.get("Authorization") if headers else None
             logger.info(f"********Auth header in list_clients: {auth_header}")
-            # SQLAlchemy connection
-            if hasattr(conn, "execute") and text is not None:
+            
+            if isinstance(conn, sqlite3.Connection):
+                cur = conn.cursor()
+                cur.execute(sql.replace(":limit", "?" ).replace(":offset", "?"), (limit, offset))
+                rows = cur.fetchall()
+                return [dict(r) for r in rows]
+            else:
+                # SQLAlchemy connection
+                if text is None:
+                    raise ImportError("SQLAlchemy is not installed or failed to load.")
                 result = conn.execute(text(sql), {"limit": limit, "offset": offset})
                 rows = [dict(r) for r in result.mappings().all()]
-                conn.close()
                 return rows
-        except Exception:
-            # fall back to sqlite path below
-            pass
-
-        cur = conn.cursor()
-        cur.execute(sql.replace(":limit", "?" ).replace(":offset", "?"), (limit, offset))
-        rows = cur.fetchall()
-        conn.close()
-        return [dict(r) for r in rows]
+        finally:
+            conn.close()
 
     def get_client(self, client_id: str) -> Optional[dict]:
-        sql = "SELECT * FROM clients WHERE client_id = :client_id"
+        sql = "SELECT * FROM client WHERE client_id = :client_id"
         conn = self._connect()
         try:
-            if hasattr(conn, "execute") and text is not None:
+            if isinstance(conn, sqlite3.Connection):
+                cur = conn.cursor()
+                cur.execute("SELECT * FROM client WHERE client_id = ?", (client_id,))
+                row = cur.fetchone()
+            else:
+                # SQLAlchemy connection
+                if text is None:
+                    raise ImportError("SQLAlchemy is not installed or failed to load.")
                 result = conn.execute(text(sql), {"client_id": client_id})
                 row = result.mappings().first()
-                conn.close()
-                return dict(row) if row else None
-        except Exception:
-            pass
-        cur = conn.cursor()
-        cur.execute("SELECT * FROM client WHERE client_id = ?", (client_id,))
-        row = cur.fetchone()
-        conn.close()
-        return dict(row) if row else None
+                
+            return dict(row) if row else None
+        finally:
+            conn.close()
 
 # Create multiple MCP servers
 store = ClientStore()
@@ -108,9 +106,9 @@ client_mcp_server = FastMCP("Clients MCP", stateless_http=True)
 
 def _to_client_model(row: dict) -> ClientModel:
     return ClientModel(
-        client_id=row.get("client_id"),
-        client_name=row.get("client_name"),
-        client_account=row.get("client_account"),
+        client_id=row["client_id"],
+        client_name=row["client_name"],
+        client_account=row["client_account"],
         #client_address=row.get("client_address"),
     )
 

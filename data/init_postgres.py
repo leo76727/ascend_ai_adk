@@ -1,10 +1,10 @@
 # generate_financial_data.py
+import asyncio
+import asyncpg
 import pandas as pd
 import numpy as np
 from faker import Faker
 from datetime import datetime, timedelta
-import psycopg2
-from sqlalchemy import create_engine, text
 import random
 import os
 
@@ -26,32 +26,38 @@ class FinancialDataGenerator:
         self.traders = [fake.name() for _ in range(30)]
         self.isins = []  # Will be generated with products
         
-    def recreate_database(self, engine, db_config):
+    async def recreate_database(self, db_config):
         """Drop and recreate the entire database"""
         print("Recreating database...")
         
         # Connect to postgres database to drop/create our database
-        conn_str = f"postgresql://{db_config['user']}:{db_config['password']}@{db_config['host']}:{db_config['port']}/postgres"
-        admin_engine = create_engine(conn_str)
+        sys_conn = await asyncpg.connect(
+            user=db_config['user'],
+            password=db_config['password'],
+            host=db_config['host'],
+            port=db_config['port'],
+            database='postgres'
+        )
         
-        with admin_engine.connect() as conn:
-            conn.execution_options(isolation_level="AUTOCOMMIT")
-            
+        try:
             # Terminate existing connections
-            conn.execute(text(f"""
+            await sys_conn.execute(f"""
                 SELECT pg_terminate_backend(pg_stat_activity.pid)
                 FROM pg_stat_activity
                 WHERE pg_stat_activity.datname = '{db_config['database']}'
                 AND pid <> pg_backend_pid();
-            """))
+            """)
             
             # Drop and recreate database
-            conn.execute(text(f"DROP DATABASE IF EXISTS {db_config['database']}"))
-            conn.execute(text(f"CREATE DATABASE {db_config['database']}"))
+            await sys_conn.execute(f"DROP DATABASE IF EXISTS {db_config['database']}")
+            await sys_conn.execute(f"CREATE DATABASE {db_config['database']}")
+            
+        finally:
+            await sys_conn.close()
         
         print("Database recreated successfully!")
         
-    def execute_sql_file(self, engine, file_path):
+    async def execute_sql_file(self, conn, file_path):
         """Execute SQL file to create tables"""
         print(f"Executing SQL file: {file_path}")
         
@@ -61,17 +67,43 @@ class FinancialDataGenerator:
         # Split by semicolon and execute each command
         commands = sql_commands.split(';')
         
-        with engine.connect() as conn:
-            for command in commands:
-                command = command.strip()
-                if command:
-                    try:
-                        conn.execute(text(command))
-                    except Exception as e:
-                        print(f"Error executing command: {e}")
-                        continue
+        for command in commands:
+            command = command.strip()
+            if command:
+                try:
+                    await conn.execute(command)
+                except Exception as e:
+                    print(f"Error executing command: {e}")
+                    # Don't continue on error for DDL usually, but keeping original logic roughly
+                    continue
         
         print("SQL file executed successfully!")
+
+    async def insert_dataframe(self, conn, table_name, df):
+        """Insert DataFrame into table using copy_records_to_table"""
+        records = list(df.itertuples(index=False, name=None))
+        # No need to convert numpy types manually, asyncpg handles basic python types. 
+        # But pandas uses numpy types (int64 etc). asyncpg sometimes issues with numpy types.
+        # It's safer to convert to python native types.
+        
+        # Helper to convert numpy/pandas types to python native
+        def convert_record(record):
+            return [
+                x.item() if hasattr(x, "item") else x 
+                for x in record
+            ]
+        
+        safe_records = [convert_record(r) for r in records]
+        
+        await conn.copy_records_to_table(
+            table_name,
+            records=safe_records,
+            columns=list(df.columns)
+        )
+    
+    # ---------------------------------------------------------
+    # Data Generation Methods (Synchronous - CPU bound)
+    # ---------------------------------------------------------
     
     def generate_underlyers(self):
         """Generate underlyer data"""
@@ -478,7 +510,7 @@ class FinancialDataGenerator:
         }
         return impacts.get(regime, 0.0)
 
-def main():
+async def main():
     # Database configuration
     db_config = {
         'host': 'localhost',
@@ -492,74 +524,84 @@ def main():
     generator = FinancialDataGenerator()
     
     # Recreate database
-    generator.recreate_database(None, db_config)
+    await generator.recreate_database(db_config)
     
-    # Create engine for the new database
-    engine = create_engine(f"postgresql://{db_config['user']}:{db_config['password']}@{db_config['host']}:{db_config['port']}/{db_config['database']}")
+    # Connect to the new database
+    conn = await asyncpg.connect(
+        user=db_config['user'],
+        password=db_config['password'],
+        host=db_config['host'],
+        port=db_config['port'],
+        database=db_config['database']
+    )
     
-    # Execute SQL file to create tables
-    generator.execute_sql_file(engine, 'create_financial_db.sql')
-    
-    print("Starting data generation...")
-    
-    # Generate data in the correct order to respect foreign key constraints
-    print("Generating underlyers...")
-    underlyers_df = generator.generate_underlyers()
-    underlyers_df.to_sql('underlyer', engine, if_exists='append', index=False)
-    
-    print("Generating clients...")
-    clients_df = generator.generate_clients(10000)
-    clients_df.to_sql('client', engine, if_exists='append', index=False)
-    
-    print("Generating baskets...")
-    baskets_df = generator.generate_baskets(underlyers_df, 100)
-    baskets_df.to_sql('basket', engine, if_exists='append', index=False)
-    
-    print("Generating products...")
-    products_df = generator.generate_products(underlyers_df, baskets_df, 500)
-    products_df.to_sql('product', engine, if_exists='append', index=False)
-    
-    print("Generating quotes...")
-    quotes_df = generator.generate_quotes(underlyers_df, clients_df, 200000)  # 200K quotes
-    quotes_df.to_sql('quote', engine, if_exists='append', index=False)
-    
-    print("Generating positions...")
-    positions_df = generator.generate_positions(clients_df, products_df, 10000)
-    positions_df.to_sql('position', engine, if_exists='append', index=False)
-    
-    print("Generating trades...")
-    trades_df = generator.generate_trades(clients_df, positions_df, products_df, 10000)
-    trades_df.to_sql('trade', engine, if_exists='append', index=False)
-    
-    print("Generating MTM data...")
-    mtm_df = generator.generate_mtm_advanced(products_df, trades_df, '2020-01-01', '2024-12-31')
-    mtm_df.to_sql('mtm', engine, if_exists='append', index=False)
-    
-    print("Data generation completed!")
-    
-    # Print summary statistics
-    print("\n=== Data Generation Summary ===")
-    print(f"Underlyers: {len(underlyers_df)}")
-    print(f"Baskets: {len(baskets_df['basket_id'].unique())}")
-    print(f"Products: {len(products_df)}")
-    print(f"Clients: {len(clients_df)}")
-    print(f"Quotes: {len(quotes_df)}")
-    print(f"Positions: {len(positions_df)}")
-    print(f"Trades: {len(trades_df)}")
-    print(f"MTM Records: {len(mtm_df)}")
-    
-    # Product type distribution
-    stock_products = len(products_df[products_df['underlyer_type'] == 'stock'])
-    basket_products = len(products_df[products_df['underlyer_type'] == 'basket'])
-    print(f"\nProduct Distribution:")
-    print(f"  Stock products: {stock_products} ({stock_products/len(products_df)*100:.1f}%)")
-    print(f"  Basket products: {basket_products} ({basket_products/len(products_df)*100:.1f}%)")
-    
-    # Quote statistics
-    traded_quotes = len(quotes_df[quotes_df['is_traded'] == True])
-    print(f"\nQuote Statistics:")
-    print(f"  Traded quotes: {traded_quotes} ({traded_quotes/len(quotes_df)*100:.1f}%)")
-    print(f"  Non-traded quotes: {len(quotes_df) - traded_quotes} ({(len(quotes_df) - traded_quotes)/len(quotes_df)*100:.1f}%)")
+    try:
+        # Execute SQL file to create tables
+        await generator.execute_sql_file(conn, 'create_financial_db.sql')
+        
+        print("Starting data generation...")
+        
+        # Generate data in the correct order to respect foreign key constraints
+        print("Generating underlyers...")
+        underlyers_df = generator.generate_underlyers()
+        await generator.insert_dataframe(conn, 'underlyer', underlyers_df)
+        
+        print("Generating clients...")
+        clients_df = generator.generate_clients(10000)
+        await generator.insert_dataframe(conn, 'client', clients_df)
+        
+        print("Generating baskets...")
+        baskets_df = generator.generate_baskets(underlyers_df, 100)
+        await generator.insert_dataframe(conn, 'basket', baskets_df)
+        
+        print("Generating products...")
+        products_df = generator.generate_products(underlyers_df, baskets_df, 500)
+        await generator.insert_dataframe(conn, 'product', products_df)
+        
+        print("Generating quotes...")
+        quotes_df = generator.generate_quotes(underlyers_df, clients_df, 200000)  # 200K quotes
+        await generator.insert_dataframe(conn, 'quote', quotes_df)
+        
+        print("Generating positions...")
+        positions_df = generator.generate_positions(clients_df, products_df, 10000)
+        await generator.insert_dataframe(conn, 'position', positions_df)
+        
+        print("Generating trades...")
+        trades_df = generator.generate_trades(clients_df, positions_df, products_df, 10000)
+        await generator.insert_dataframe(conn, 'trade', trades_df)
+        
+        print("Generating MTM data...")
+        mtm_df = generator.generate_mtm_advanced(products_df, trades_df, '2020-01-01', '2024-12-31')
+        await generator.insert_dataframe(conn, 'mtm', mtm_df)
+        
+        print("Data generation completed!")
+        
+        # Print summary statistics
+        print("\n=== Data Generation Summary ===")
+        print(f"Underlyers: {len(underlyers_df)}")
+        print(f"Baskets: {len(baskets_df['basket_id'].unique())}")
+        print(f"Products: {len(products_df)}")
+        print(f"Clients: {len(clients_df)}")
+        print(f"Quotes: {len(quotes_df)}")
+        print(f"Positions: {len(positions_df)}")
+        print(f"Trades: {len(trades_df)}")
+        print(f"MTM Records: {len(mtm_df)}")
+        
+        # Product type distribution
+        stock_products = len(products_df[products_df['underlyer_type'] == 'stock'])
+        basket_products = len(products_df[products_df['underlyer_type'] == 'basket'])
+        print(f"\nProduct Distribution:")
+        print(f"  Stock products: {stock_products} ({stock_products/len(products_df)*100:.1f}%)")
+        print(f"  Basket products: {basket_products} ({basket_products/len(products_df)*100:.1f}%)")
+        
+        # Quote statistics
+        traded_quotes = len(quotes_df[quotes_df['is_traded'] == True])
+        print(f"\nQuote Statistics:")
+        print(f"  Traded quotes: {traded_quotes} ({traded_quotes/len(quotes_df)*100:.1f}%)")
+        print(f"  Non-traded quotes: {len(quotes_df) - traded_quotes} ({(len(quotes_df) - traded_quotes)/len(quotes_df)*100:.1f}%)")
+
+    finally:
+        await conn.close()
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())

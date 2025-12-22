@@ -1,0 +1,15 @@
+{
+    "eval_set_id": "sample_set",
+    "criteria": {
+        "default": {
+            "metric": "semantic",
+            "instruction": "The response should provide a professional trading action plan based on the input.",
+            "threshold": 0.5
+        },
+        "trader_manager_morning": {
+            "metric": "tone",
+            "instruction": "The tone must be professional, authoritative, and concise, suitable for a trading desk morning update.",
+            "threshold": 0.8
+        }
+    }
+}

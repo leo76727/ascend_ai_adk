@@ -1,26 +1,15 @@
 import os
 import sqlite3
 from typing import TypedDict, Optional
-
 from pydantic import BaseModel, Field
+from mcp.server.fastmcp import FastMCP
+from sqlalchemy import create_engine, text
 
 try:
     from ..config import config
     DB_PATH = config.DB_PATH
 except Exception:
     DB_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "data", "positions.db"))
-
-try:
-    from mcp.server.fastmcp import FastMCP
-except Exception:  # pragma: no cover - FastMCP optional for testing
-    FastMCP = None  # type: ignore
-
-try:
-    from sqlalchemy import create_engine, text
-except Exception:
-    create_engine = None  # type: ignore
-    text = None  # type: ignore
-
 
 class MTMModel(BaseModel):
     """Structured representation of an MTM record."""
@@ -56,40 +45,56 @@ class MTMStore:
             LIMIT :limit OFFSET :offset
         """
         conn = self._connect()
-        try:
-            if hasattr(conn, "execute") and text is not None:
-                result = conn.execute(text(sql), {"limit": limit, "offset": offset})
-                rows = [dict(r) for r in result.mappings().all()]
+        
+        if isinstance(conn, sqlite3.Connection):
+            try:
+                cur = conn.cursor()
+                cur.execute(sql.replace(":limit", "?").replace(":offset", "?"), (limit, offset))
+                rows = cur.fetchall()
                 conn.close()
-                return rows
+                return [dict(r) for r in rows]
+            except Exception:
+                conn.close()
+                return []
+        
+        # SQLAlchemy path
+        try:
+            result = conn.execute(text(sql), {"limit": limit, "offset": offset})
+            rows = [dict(r) for r in result.mappings().all()]
+            conn.close()
+            return rows
         except Exception:
-            pass
-        cur = conn.cursor()
-        cur.execute(sql.replace(":limit", "?").replace(":offset", "?"), (limit, offset))
-        rows = cur.fetchall()
-        conn.close()
-        return [dict(r) for r in rows]
+            conn.close()
+            return []
 
     def get_mtm(self, isin: str, trade_date: str) -> Optional[dict]:
         sql = "SELECT * FROM mtm WHERE isin = :isin AND trade_date = :trade_date"
         conn = self._connect()
-        try:
-            if hasattr(conn, "execute") and text is not None:
-                result = conn.execute(text(sql), {"isin": isin, "trade_date": trade_date})
-                row = result.mappings().first()
+        
+        if isinstance(conn, sqlite3.Connection):
+            try:
+                cur = conn.cursor()
+                cur.execute("SELECT * FROM mtm WHERE isin = ? AND trade_date = ?", (isin, trade_date))
+                row = cur.fetchone()
                 conn.close()
                 return dict(row) if row else None
+            except Exception:
+                conn.close()
+                return None
+                
+        # SQLAlchemy path
+        try:
+            result = conn.execute(text(sql), {"isin": isin, "trade_date": trade_date})
+            row = result.mappings().first()
+            conn.close()
+            return dict(row) if row else None
         except Exception:
-            pass
-        cur = conn.cursor()
-        cur.execute("SELECT * FROM mtm WHERE isin = ? AND trade_date = ?", (isin, trade_date))
-        row = cur.fetchone()
-        conn.close()
-        return dict(row) if row else None
+            conn.close()
+            return None
 
 
 store = MTMStore()
-mcp = FastMCP("MTM MCP") if FastMCP is not None else None
+mcp = FastMCP("MTM MCP")
 
 
 def _to_mtm_model(row: dict) -> MTMModel:
@@ -102,30 +107,18 @@ def _to_mtm_model(row: dict) -> MTMModel:
     )
 
 
-if mcp is not None:
-    @mcp.tool()
-    def list_mtm(limit: int = 100, offset: int = 0) -> MTMResponse:
-        """List MTM records with pagination."""
-        rows = store.list_mtm(limit=limit, offset=offset)
-        models = [_to_mtm_model(r) for r in rows]
-        return MTMResponse(count=len(models), mtm_records=models)
+@mcp.tool()
+def list_mtm(limit: int = 100, offset: int = 0) -> MTMResponse:
+    """List MTM records with pagination."""
+    rows = store.list_mtm(limit=limit, offset=offset)
+    models = [_to_mtm_model(r) for r in rows]
+    return MTMResponse(count=len(models), mtm_records=models)
 
-    @mcp.tool()
-    def get_mtm(isin: str, trade_date: str) -> Optional[MTMModel]:
-        """Get MTM record by ISIN and trade date."""
-        row = store.get_mtm(isin, trade_date)
-        return _to_mtm_model(row) if row else None
-
-else:
-    def list_mtm(limit: int = 100, offset: int = 0) -> MTMResponse:
-        rows = store.list_mtm(limit=limit, offset=offset)
-        models = [_to_mtm_model(r) for r in rows]
-        return MTMResponse(count=len(models), mtm_records=models)
-
-    def get_mtm(isin: str, trade_date: str) -> Optional[MTMModel]:
-        row = store.get_mtm(isin, trade_date)
-        return _to_mtm_model(row) if row else None
-
+@mcp.tool()
+def get_mtm(isin: str, trade_date: str) -> Optional[MTMModel]:
+    """Get MTM record by ISIN and trade date."""
+    row = store.get_mtm(isin, trade_date)
+    return _to_mtm_model(row) if row else None
 
 __all__ = ["mcp", "store", "list_mtm", "get_mtm"]
 

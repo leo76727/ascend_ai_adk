@@ -1,26 +1,15 @@
 import os
 import sqlite3
 from typing import TypedDict, Optional
-
+from mcp.server.fastmcp import FastMCP
 from pydantic import BaseModel, Field
+from sqlalchemy import create_engine, text
 
 try:
     from config import config
     DB_PATH = config.DB_PATH
 except Exception:
     DB_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "data", "positions.db"))
-
-try:
-    from mcp.server.fastmcp import FastMCP
-except Exception:
-    FastMCP = None  # type: ignore
-
-try:
-    from sqlalchemy import create_engine, text
-except Exception:
-    create_engine = None  # type: ignore
-    text = None  # type: ignore
-
 
 class QuoteModel(BaseModel):
     quote_id: str = Field(..., max_length=20)  # PRIMARY KEY
@@ -60,40 +49,56 @@ class QuoteStore:
                  price, is_traded, quote_date 
                  FROM quote ORDER BY quote_id LIMIT :limit OFFSET :offset"""
         conn = self._connect()
-        try:
-            if hasattr(conn, "execute") and text is not None:
-                result = conn.execute(text(sql), {"limit": limit, "offset": offset})
-                rows = [dict(r) for r in result.mappings().all()]
+        
+        if isinstance(conn, sqlite3.Connection):
+            try:
+                cur = conn.cursor()
+                cur.execute(sql.replace(":limit", "?").replace(":offset", "?"), (limit, offset))
+                rows = cur.fetchall()
                 conn.close()
-                return rows
+                return [dict(r) for r in rows]
+            except Exception:
+                conn.close()
+                return []
+        
+        # SQLAlchemy path
+        try:
+            result = conn.execute(text(sql), {"limit": limit, "offset": offset})
+            rows = [dict(r) for r in result.mappings().all()]
+            conn.close()
+            return rows
         except Exception:
-            pass
-        cur = conn.cursor()
-        cur.execute(sql.replace(":limit", "?").replace(":offset", "?"), (limit, offset))
-        rows = cur.fetchall()
-        conn.close()
-        return [dict(r) for r in rows]
+            conn.close()
+            return []
 
     def get_quote(self, quote_id: str) -> Optional[dict]:
         sql = "SELECT * FROM quote WHERE quote_id = :quote_id"
         conn = self._connect()
-        try:
-            if hasattr(conn, "execute") and text is not None:
-                result = conn.execute(text(sql), {"quote_id": quote_id})
-                row = result.mappings().first()
+        
+        if isinstance(conn, sqlite3.Connection):
+            try:
+                cur = conn.cursor()
+                cur.execute("SELECT * FROM quote WHERE quote_id = ?", (quote_id,))
+                row = cur.fetchone()
                 conn.close()
                 return dict(row) if row else None
+            except Exception:
+                conn.close()
+                return None
+                
+        # SQLAlchemy path
+        try:
+            result = conn.execute(text(sql), {"quote_id": quote_id})
+            row = result.mappings().first()
+            conn.close()
+            return dict(row) if row else None
         except Exception:
-            pass
-        cur = conn.cursor()
-        cur.execute("SELECT * FROM quote WHERE quote_id = ?", (quote_id,))
-        row = cur.fetchone()
-        conn.close()
-        return dict(row) if row else None
+            conn.close()
+            return None
 
 
 store = QuoteStore()
-mcp = FastMCP("Quote MCP") if FastMCP is not None else None
+mcp = FastMCP("Quote MCP")
 
 
 def _to_quote_model(row: dict) -> QuoteModel:
@@ -108,46 +113,25 @@ def _to_quote_model(row: dict) -> QuoteModel:
         quote_date=row["quote_date"]
     )
 
-
-if mcp is not None:
-    @mcp.tool()
-    def list_quotes(limit: int = 100, offset: int = 0) -> QuotesResponse:
-        rows = store.list_quotes(limit=limit, offset=offset)
-        models = [_to_quote_model(r) for r in rows]
-        return QuotesResponse(count=len(models), quotes=models)
+@mcp.tool()
+def list_quotes(limit: int = 100, offset: int = 0) -> QuotesResponse:
+    rows = store.list_quotes(limit=limit, offset=offset)
+    models = [_to_quote_model(r) for r in rows]
+    return QuotesResponse(count=len(models), quotes=models)
 
 
-    @mcp.tool()
-    def get_quote(quote_id: str) -> Optional[QuoteModel]:
-        row = store.get_quote(quote_id)
-        return _to_quote_model(row) if row else None
+@mcp.tool()
+def get_quote(quote_id: str) -> Optional[QuoteModel]:
+    row = store.get_quote(quote_id)
+    return _to_quote_model(row) if row else None
 
 
-    @mcp.tool()
-    def get_quote_info(quote_id: str) -> Optional[QuoteInfo]:
-        row = store.get_quote(quote_id)
-        if not row:
-            return None
-        return QuoteInfo(quote_id=row["quote_id"], client_id=row.get("client_id"))  # type: ignore[arg-type]
-
-else:
-    def list_quotes(limit: int = 100, offset: int = 0) -> QuotesResponse:
-        rows = store.list_quotes(limit=limit, offset=offset)
-        models = [_to_quote_model(r) for r in rows]
-        return QuotesResponse(count=len(models), quotes=models)
-
-
-    def get_quote(quote_id: str) -> Optional[QuoteModel]:
-        row = store.get_quote(quote_id)
-        return _to_quote_model(row) if row else None
-
-
-    def get_quote_info(quote_id: str) -> Optional[QuoteInfo]:
-        row = store.get_quote(quote_id)
-        if not row:
-            return None
-        return QuoteInfo(quote_id=row["quote_id"], client_id=row.get("client_id"))  # type: ignore[arg-type]
-
+@mcp.tool()
+def get_quote_info(quote_id: str) -> Optional[QuoteInfo]:
+    row = store.get_quote(quote_id)
+    if not row:
+        return None
+    return QuoteInfo(quote_id=row["quote_id"], client_id=row.get("client_id"))  # type: ignore[arg-type]
 
 __all__ = ["mcp", "store", "list_quotes", "get_quote", "get_quote_info"]
 
